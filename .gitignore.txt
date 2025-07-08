@@ -1,0 +1,9 @@
+# Môi trường ảo
+venv/
+
+# File biến môi trường
+.env
+
+# Các file của Python
+__pycache__/
+*.pyc
