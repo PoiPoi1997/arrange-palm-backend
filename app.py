@@ -1,27 +1,27 @@
 import os
+import requests
 from flask import Flask, request, Response
-from google.cloud import vision
 from dotenv import load_dotenv
 
-# Tải các biến môi trường từ file .env (chứa đường dẫn tới key của Google)
+# Tải biến môi trường (chứa API key của OCR.space)
 load_dotenv()
 
 # Khởi tạo ứng dụng Flask
 app = Flask(__name__)
 
-def format_vision_response_as_html(response):
+def format_ocr_response_as_html(ocr_result):
     """
-    Hàm này nhận kết quả từ Google Vision và chuyển nó thành một chuỗi HTML đơn giản.
+    Hàm này nhận kết quả từ OCR.space và chuyển nó thành HTML.
     """
-    if response.error.message:
-        raise Exception(
-            '{}\nFor more info on error messages, check: '
-            'https://cloud.google.com/apis/design/errors'.format(response.error.message))
+    full_text = ""
+    # Kiểm tra xem kết quả có hợp lệ và chứa văn bản không
+    if ocr_result and not ocr_result.get('IsErroredOnProcessing'):
+        for res in ocr_result.get('ParsedResults', []):
+            full_text += res.get('ParsedText', '')
+            
+    if not full_text:
+        full_text = "Không nhận dạng được văn bản hoặc đã xảy ra lỗi."
 
-    # Lấy toàn bộ văn bản mà Google nhận dạng được
-    full_text = response.full_text_annotation.text
-    
-    # Bọc toàn bộ văn bản trong thẻ <pre> của HTML để giữ lại định dạng
     html_output = f"""
     <!DOCTYPE html>
     <html>
@@ -43,39 +43,38 @@ def format_vision_response_as_html(response):
 
 @app.route('/process-image', methods=['POST'])
 def process_image():
-    """
-    Đây là API endpoint chính mà ứng dụng Android sẽ gọi tới.
-    """
-    # 1. Kiểm tra xem có file ảnh được gửi lên không
     if 'image' not in request.files:
         return "Không tìm thấy file ảnh", 400
 
-    file = request.files['image']
-    if file.filename == '':
+    file = request.files.get('image')
+    if not file:
         return "Chưa chọn file nào", 400
 
     try:
-        # 2. Đọc nội dung của file ảnh
-        content = file.read()
+        # Lấy API key từ biến môi trường
+        api_key = os.getenv('OCR_SPACE_API_KEY')
+        if not api_key:
+            raise Exception("API key của OCR.space không được tìm thấy.")
 
-        # 3. Gọi API của Google Cloud Vision
-        client = vision.ImageAnnotatorClient()
-        image = vision.Image(content=content)
-
-        # Sử dụng document_text_detection để có kết quả OCR tốt nhất cho tài liệu
-        response = client.document_text_detection(image=image)
+        # Gọi đến API của OCR.space
+        ocr_url = 'https://api.ocr.space/parse/image'
+        payload = {'apikey': api_key, 'language': 'eng'}
         
-        # 4. Chuyển đổi kết quả nhận được thành HTML
-        html_string = format_vision_response_as_html(response)
+        response = requests.post(
+            ocr_url,
+            files={file.filename: file.read()},
+            data=payload,
+        )
+        response.raise_for_status()  # Báo lỗi nếu có vấn đề về kết nối
         
-        # 5. Trả chuỗi HTML về cho ứng dụng Android
+        # Chuyển đổi kết quả nhận được thành HTML
+        html_string = format_ocr_response_as_html(response.json())
+        
         return Response(html_string, mimetype='text/html; charset=utf-8')
 
     except Exception as e:
-        # In lỗi ra để gỡ rối và trả về thông báo lỗi
         print(f"Đã xảy ra lỗi: {e}")
         return f"Đã xảy ra lỗi phía server: {e}", 500
 
 if __name__ == '__main__':
-    # Chạy ứng dụng ở chế độ debug để dễ dàng sửa lỗi
     app.run(debug=True, host='0.0.0.0', port=5000)
